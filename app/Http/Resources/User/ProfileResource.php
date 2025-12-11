@@ -20,7 +20,15 @@ class ProfileResource extends JsonResource
             'email' => (string) $this->resource->email,
             // Ensure balance is returned as a string to avoid float precision issues in JS
             'balance' => (string) $this->resource->balance,
-            'assets'  => [],
+            'assets'  => $this->whenLoaded('assets', function () {
+                return $this->resource->assets->map(function ($a) {
+                    return [
+                        'symbol'        => $a->symbol->value,
+                        'amount'        => (string) $a->amount,
+                        'locked_amount' => (string) $a->locked_amount,
+                    ];
+                })->values();
+            }, []),
         ];
     }
 }
