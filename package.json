@@ -1,31 +1,35 @@
 {
-    "$schema": "https://www.schemastore.org/package.json",
-    "private": true,
-    "type": "module",
-    "scripts": {
-        "build": "vite build",
-        "dev": "vite",
-        "lint": "eslint --ext .ts,.tsx,.vue,.js resources/js",
-        "lint:fix": "eslint --ext .ts,.tsx,.vue,.js resources/js --fix",
-        "format": "prettier --write ."
-    },
-    "devDependencies": {
-        "@tailwindcss/vite": "^4.0.0",
-        "@typescript-eslint/parser": "^8.49.0",
-        "@vitejs/plugin-vue": "^6.0.2",
-        "axios": "^1.11.0",
-        "concurrently": "^9.0.1",
-        "eslint": "^9.39.1",
-        "eslint-plugin-vue": "^10.6.2",
-        "laravel-vite-plugin": "^2.0.0",
-        "prettier": "^3.7.4",
-        "tailwindcss": "^4.1.17",
-        "typescript": "^5.9.3",
-        "vite": "^7.0.7",
-        "vue": "^3.5.25",
-        "vue-eslint-parser": "^10.2.0"
-    },
-    "dependencies": {
-        "@inertiajs/vue3": "^2.2.21"
-    }
+  "$schema": "https://www.schemastore.org/package.json",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite",
+    "lint": "eslint --ext .ts,.tsx,.vue,.js resources/js",
+    "lint:fix": "eslint --ext .ts,.tsx,.vue,.js resources/js --fix",
+    "format": "prettier --write .",
+    "prepare": "husky",
+    "test": "vitest --run"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.0",
+    "@typescript-eslint/parser": "^8.49.0",
+    "@vitejs/plugin-vue": "^6.0.2",
+    "axios": "^1.11.0",
+    "concurrently": "^9.0.1",
+    "eslint": "^9.39.1",
+    "eslint-plugin-vue": "^10.6.2",
+    "husky": "^9.1.7",
+    "laravel-vite-plugin": "^2.0.0",
+    "prettier": "^3.7.4",
+    "tailwindcss": "^4.1.17",
+    "typescript": "^5.9.3",
+    "vite": "^7.0.7",
+    "vitest": "^4.0.15",
+    "vue": "^3.5.25",
+    "vue-eslint-parser": "^10.2.0"
+  },
+  "dependencies": {
+    "@inertiajs/vue3": "^2.2.21"
+  }
 }

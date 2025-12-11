@@ -1,0 +1,38 @@
+echo "Husky: Running pre-commit checks..."
+
+# 1) PHP code style (Laravel Pint)
+echo "Checking PHP code style with Pint (--test)..."
+if ! php vendor/bin/pint --test; then
+  echo "[1/4] Pint found formatting issues."
+  echo "How to fix: run php vendor/bin/pint to apply fixes, then commit again."
+  exit 1
+fi
+
+# 2) Backend tests (unit + feature)
+echo "[2/4] Running backend tests (php artisan test)..."
+if ! php artisan test; then
+  echo "Backend tests failed."
+  echo "Check failing tests locally with: php artisan test"
+  exit 1
+fi
+
+# 3) ESLint (frontend)
+echo "[3/4] Running ESLint (npm run lint)..."
+if ! npm run --silent lint; then
+  echo "ESLint found issues."
+  echo "What to do when ESLint fails:"
+  echo "  1) See errors: npm run lint"
+  echo "  2) Auto-fix what can be fixed: npm run lint:fix"
+  echo "  3) Manually fix remaining errors, then commit again."
+  exit 1
+fi
+
+# 4) Frontend tests (Vitest)
+echo "[4/4] Running frontend tests (Vitest)..."
+if ! npm run --silent test; then
+  echo "Frontend tests failed."
+  echo "Run locally with: npm run test"
+  exit 1
+fi
+
+echo "All pre-commit checks passed."
