@@ -45,6 +45,14 @@ class User extends Authenticatable
     }
 
     /**
+     * Define a one-to-many relationship with the Asset model.
+     */
+    public function assets(): HasMany
+    {
+        return $this->hasMany(Asset::class);
+    }
+
+    /**
      * Get the attributes that should be cast.
      *
      * @return array<string, string>
