@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { reactive, computed, onMounted, ref, nextTick } from 'vue'
 import axios from 'axios'
+import { Link } from '@inertiajs/vue3'
 
 type Profile = {
   balance: string
@@ -134,6 +135,15 @@ const submit = async () => {
   <div class="p-6">
     <h1 class="text-2xl font-bold mb-2">Trade</h1>
     <p class="text-gray-600 mb-4">Place a Buy Limit Order</p>
+
+    <div class="mb-4">
+      <Link
+        href="/dashboard"
+        class="inline-block bg-gray-200 text-gray-800 px-3 py-1 rounded hover:bg-gray-300"
+      >
+        ← Back to Dashboard
+      </Link>
+    </div>
 
     <div v-if="state.loading" class="text-gray-500">Loading…</div>
     <div v-else>
