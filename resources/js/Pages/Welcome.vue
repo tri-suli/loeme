@@ -7,6 +7,9 @@ defineProps<{ appName?: string }>();
         <div class="p-8 text-center">
             <h1 class="text-3xl font-semibold mb-2">Welcome to {{ appName ?? 'Laravel' }}</h1>
             <p class="text-gray-600">This page is rendered via Inertia + Vue 3 (TypeScript).</p>
+            <div class="mt-6">
+                <a href="/login" class="text-blue-600 hover:underline">Log in</a>
+            </div>
         </div>
     </div>
 </template>

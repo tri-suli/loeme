@@ -31,6 +31,8 @@ class HandleInertiaRequests extends Middleware
             'auth' => [
                 'user' => $request->user(),
             ],
+            // Expose CSRF token to the frontend to be used in forms without relying on window.Laravel
+            'csrf_token' => csrf_token(),
         ]);
     }
 }
