@@ -17,6 +17,8 @@ return new class extends Migration
             $table->string('email')->unique();
             $table->timestamp('email_verified_at')->nullable();
             $table->string('password');
+            // USD funds balance for the user (non-nullable, default 0.00)
+            $table->decimal('balance', 18, 2)->default(0);
             $table->rememberToken();
             $table->timestamps();
         });
