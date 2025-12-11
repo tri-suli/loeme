@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, computed } from 'vue'
 import axios from 'axios'
+import { Link } from '@inertiajs/vue3'
 
 type Profile = {
   id: number
@@ -51,6 +52,15 @@ onMounted(fetchProfile)
   <div class="p-6">
     <h1 class="text-2xl font-bold mb-2">Dashboard</h1>
     <p class="text-gray-600">Welcome to your dashboard</p>
+
+    <div class="mt-4">
+      <Link
+        href="/trade"
+        class="inline-block bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-500"
+      >
+        Go to Trade
+      </Link>
+    </div>
 
     <div class="mt-6">
       <div v-if="state.loading" class="text-gray-500">Loading profile…</div>

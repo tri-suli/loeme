@@ -3,6 +3,7 @@
 namespace App\Providers;
 
 use Illuminate\Contracts\Auth\StatefulGuard;
+use Illuminate\Http\Resources\Json\JsonResource;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -24,6 +25,8 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        //
+        // Return JSON resources without the default top-level "data" wrapper
+        // so frontend can read properties directly (e.g., profile.balance).
+        JsonResource::withoutWrapping();
     }
 }
