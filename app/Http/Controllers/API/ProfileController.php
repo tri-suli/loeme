@@ -13,7 +13,7 @@ class ProfileController extends Controller
      */
     public function __invoke(ProfileRequest $request): ProfileResource
     {
-        $user = $request->user();
+        $user = $request->user()->loadMissing('assets');
 
         return new ProfileResource($user);
     }

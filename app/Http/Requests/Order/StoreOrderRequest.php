@@ -27,7 +27,7 @@ class StoreOrderRequest extends FormRequest
     {
         return [
             'symbol' => ['required', 'string', Rule::in(Crypto::values())],
-            'side'   => ['nullable', 'string', Rule::in(OrderSide::values())],
+            'side'   => ['required', 'string', Rule::in(OrderSide::values())],
             // Validate as decimal-like strings; let the server handle precision
             'price'  => ['required', 'regex:/^\d+(?:\.\d{1,18})?$/', 'not_in:0', 'gt:0'],
             'amount' => ['required', 'regex:/^\d+(?:\.\d{1,18})?$/', 'not_in:0', 'gt:0'],
@@ -51,10 +51,7 @@ class StoreOrderRequest extends FormRequest
      */
     public function validated($key = null, $default = null)
     {
-        $data = parent::validated($key, $default);
-        // Force side to buy regardless of input
-        $data['side'] = 'buy';
-
-        return $data;
+        // Do not override provided side; just return validated data
+        return parent::validated($key, $default);
     }
 }
