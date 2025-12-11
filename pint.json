@@ -25,21 +25,9 @@
 
         "trailing_comma_in_multiline": {
             "after_heredoc": true,
-            "elements": [
-                "arrays",
-                "array_destructuring",
-                "arguments",
-                "parameters",
-                "match"
-            ]
+            "elements": ["arrays", "array_destructuring", "arguments", "parameters", "match"]
         }
     },
-    "exclude": [
-        "bootstrap/cache"
-    ],
-    "notName": [
-        "*_ide_helper.php",
-        "ide_helper_models.php",
-        "*.blade.php"
-    ]
+    "exclude": ["bootstrap/cache"],
+    "notName": ["*_ide_helper.php", "ide_helper_models.php", "*.blade.php"]
 }
