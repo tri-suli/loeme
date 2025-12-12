@@ -65,41 +65,90 @@ Authenticated endpoint protected by Sanctum and throttled. Returns the current o
 - Method: GET
 - Path: /api/orders
 - Query params:
-  - symbol (required): e.g., BTC, ETH (case-insensitive; must be a supported Crypto enum)
-  - limit (optional): number of levels per side; default 100, max 1000
-  - raw (optional): when true returns individual open orders; default false (aggregated by price level)
+    - symbol (required): e.g., BTC, ETH (case-insensitive; must be a supported Crypto enum)
+    - limit (optional): number of levels per side; default 100, max 1000
+    - raw (optional): when true returns individual open orders; default false (aggregated by price level)
 
 Responses
 
 Aggregated (default)
 
 {
-  "bids": [
-    { "price": "68000.000000000000000000", "amount": "1.250000000000000000" },
-    { "price": "67950.000000000000000000", "amount": "0.750000000000000000" }
-  ],
-  "asks": [
-    { "price": "68100.000000000000000000", "amount": "0.500000000000000000" }
-  ]
+"bids": [
+{ "price": "68000.000000000000000000", "amount": "1.250000000000000000" },
+{ "price": "67950.000000000000000000", "amount": "0.750000000000000000" }
+],
+"asks": [
+{ "price": "68100.000000000000000000", "amount": "0.500000000000000000" }
+]
 }
 
 Raw mode (?raw=true)
 
 {
-  "bids": [
-    { "id": 123, "price": "68000.000000000000000000", "remaining": "0.500000000000000000", "created_at": "2025-12-12T18:45:31+00:00" }
-  ],
-  "asks": [
-    { "id": 124, "price": "68100.000000000000000000", "remaining": "0.500000000000000000", "created_at": "2025-12-12T18:46:01+00:00" }
-  ]
+"bids": [
+{ "id": 123, "price": "68000.000000000000000000", "remaining": "0.500000000000000000", "created_at": "2025-12-12T18:45:31+00:00" }
+],
+"asks": [
+{ "id": 124, "price": "68100.000000000000000000", "remaining": "0.500000000000000000", "created_at": "2025-12-12T18:46:01+00:00" }
+]
 }
 
 Errors
+
 - 401 Unauthorized: when not authenticated
 - 422 Unprocessable Content: invalid or unsupported symbol
 
 Notes
+
 - Only orders with status=open are included.
 - Bids are sorted by price DESC (best first). Asks are sorted by price ASC (best first).
 - Amounts and prices are returned as strings to preserve precision; do not cast to float on the client.
 - Query performance uses composite indexes on (symbol, status) and (symbol, side, price, id).
+
+## API – Cancel Order (POST /api/orders/{id}/cancel)
+
+Authenticated endpoint protected by Sanctum and throttled. Cancels an open order, releases locked funds/assets atomically, and broadcasts portfolio and orderbook updates.
+
+- Method: POST
+- Path: /api/orders/{id}/cancel
+- Path params:
+    - id (integer): the order ID to cancel. Must belong to the authenticated user.
+
+Responses
+
+200 OK
+
+{
+"order": {
+"id": 123,
+"user_id": 1,
+"symbol": "BTC",
+"side": "buy",
+"price": "68000.000000000000000000",
+"amount": "0.500000000000000000",
+"remaining": "0",
+"status": 3,
+"created_at": "2025-12-12T18:45:31+00:00",
+"updated_at": "2025-12-12T19:10:00+00:00"
+},
+"portfolio": {
+"balance": "10000.00",
+"asset": {
+"symbol": "BTC",
+"amount": "1.000000000000000000",
+"locked_amount": "0.000000000000000000"
+}
+}
+}
+
+Errors
+
+- 401 Unauthorized: when not authenticated
+- 404 Not Found: when the order does not exist or does not belong to the user (no existence leak)
+
+Notes
+
+- Idempotent: canceling an already filled or canceled order returns 200 with current state and no side effects.
+- All balance changes are done within a single DB transaction with row-level locks.
+- Amounts and prices are strings to preserve precision; do not cast to float on the client.
