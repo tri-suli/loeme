@@ -58,6 +58,33 @@ If you discover a security vulnerability within Laravel, please send an e-mail t
 
 The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
 
+## Frontend – Live Orders Patching (LME-9)
+
+This project implements live, in-place patching of the Orders list in the SPA using Laravel Echo (Pusher compatible).
+
+- Subscriptions
+  - private-user.{userId}: receives OrderMatched and OrderCancelled events relevant to the authenticated user.
+  - orderbook.{symbol}: listens for OrderCancelled per selected symbol (filters.symbol) to reflect cancellations promptly.
+- Behavior
+  - OrderMatched: updates wallet (USD and asset), sets affected order status to filled and moves it from Open to History.
+  - OrderCancelled: marks order as cancelled, moves it from Open to History, and applies portfolio release details.
+  - Idempotency: duplicate events are ignored (trade_id for matches; order id for cancellations).
+  - Sorting/filters: preserved across live updates; lists are re-computed with the current sort and filter state.
+  - Cleanup: channels are unsubscribed on component unmount and re-subscribed when the symbol filter changes.
+
+Manual verification (seeded backend)
+1. Ensure your .env has valid Pusher (or Laravel WebSockets) config, and you are authenticated in the SPA.
+2. In separate terminals:
+   - php artisan queue:work
+   - php artisan serve
+   - If self-hosting websockets: php artisan websockets:serve
+3. Open the Orders page (/orders). Keep it open.
+4. Place a matching counter-order from another browser session or using the Trade page (/trade).
+5. Observe without refresh:
+   - Wallet balance/assets update.
+   - The matched order moves to History with status FILLED.
+6. Cancel an open order (from Orders or via POST /api/orders/{id}/cancel) and observe it moves to History with status CANCELLED and wallet reflects released funds/assets.
+
 ## API – Order Book (GET /api/orders)
 
 Authenticated endpoint protected by Sanctum and throttled. Returns the current order book for a symbol.
