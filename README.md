@@ -57,3 +57,49 @@ If you discover a security vulnerability within Laravel, please send an e-mail t
 ## License
 
 The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+
+## API – Order Book (GET /api/orders)
+
+Authenticated endpoint protected by Sanctum and throttled. Returns the current order book for a symbol.
+
+- Method: GET
+- Path: /api/orders
+- Query params:
+  - symbol (required): e.g., BTC, ETH (case-insensitive; must be a supported Crypto enum)
+  - limit (optional): number of levels per side; default 100, max 1000
+  - raw (optional): when true returns individual open orders; default false (aggregated by price level)
+
+Responses
+
+Aggregated (default)
+
+{
+  "bids": [
+    { "price": "68000.000000000000000000", "amount": "1.250000000000000000" },
+    { "price": "67950.000000000000000000", "amount": "0.750000000000000000" }
+  ],
+  "asks": [
+    { "price": "68100.000000000000000000", "amount": "0.500000000000000000" }
+  ]
+}
+
+Raw mode (?raw=true)
+
+{
+  "bids": [
+    { "id": 123, "price": "68000.000000000000000000", "remaining": "0.500000000000000000", "created_at": "2025-12-12T18:45:31+00:00" }
+  ],
+  "asks": [
+    { "id": 124, "price": "68100.000000000000000000", "remaining": "0.500000000000000000", "created_at": "2025-12-12T18:46:01+00:00" }
+  ]
+}
+
+Errors
+- 401 Unauthorized: when not authenticated
+- 422 Unprocessable Content: invalid or unsupported symbol
+
+Notes
+- Only orders with status=open are included.
+- Bids are sorted by price DESC (best first). Asks are sorted by price ASC (best first).
+- Amounts and prices are returned as strings to preserve precision; do not cast to float on the client.
+- Query performance uses composite indexes on (symbol, status) and (symbol, side, price, id).
