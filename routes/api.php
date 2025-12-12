@@ -19,4 +19,9 @@ Route::middleware('auth:sanctum')->group(function (Router $router) {
         ->whereNumber('id')
         ->middleware('throttle:30,1')
         ->name('orders.cancel');
+
+    // Current user's orders (open + recent history)
+    $router->get('my/orders', [OrdersController::class, 'my'])
+        ->middleware('throttle:120,1')
+        ->name('orders.my');
 });
