@@ -85,6 +85,40 @@ Manual verification (seeded backend)
    - The matched order moves to History with status FILLED.
 6. Cancel an open order (from Orders or via POST /api/orders/{id}/cancel) and observe it moves to History with status CANCELLED and wallet reflects released funds/assets.
 
+## Frontend – Order filtering and toasts/alerts (LME-10)
+
+Implements filter controls for the Orders page with URL query persistence and a centralized toast/alert system with accessibility and de-duplication.
+
+- Filters (Orders page)
+  - Controls: Symbol (All/BTC/ETH), Side (All/Buy/Sell), Status (All/Open/Filled/Cancelled), and text Search.
+  - Persistence: The current filters are reflected in the page URL query string (symbol, side, status, search) and update reactively without full page reloads.
+  - Defaults: If no query is provided, Status defaults to Open. The last-used Symbol is remembered in localStorage.
+  - Behavior: Filters are applied client-side to the loaded Open and Recent History lists; changing Symbol triggers a reload of orders and re-subscription to orderbook events for the selected symbol.
+  - Accessibility: Native select and input controls with labels; sortable headers are keyboard-activatable (Enter/Space) with visible focus rings. Side coloring: buy=green, sell=red. Status badges are styled and color-coded.
+
+- Toasts/Alerts
+  - Centralized store at resources/js/stores/toasts.ts and UI host component at resources/js/components/ToastHost.vue.
+  - Usage: The Orders page imports and renders <ToastHost /> so notifications appear globally on that view.
+  - Types: success, error, info. Success is used for order placement/cancel; error is used for API and validation/server failures.
+  - De-duplication: Toasts use an idempotencyKey when available (e.g., OrderPlaced client key, order id for cancellations, or HTTP method+URL+status); duplicates are ignored.
+  - Auto-dismiss: Success/info dismiss after ~5s; error after ~8s. Users can dismiss toasts manually via keyboard or mouse.
+  - Accessibility: An ARIA live region announces the newest toast to screen readers. Each toast uses role="status" and provides a Dismiss control with proper focus styles.
+
+- Integration
+  - Axios interceptor (resources/js/bootstrap.js) captures HTTP errors and shows an error toast automatically.
+  - Laravel Echo events (private-user.{id}, orderbook.{symbol}) show success toasts for OrderPlaced and OrderCancelled, while updates to wallet and orders remain live and idempotent.
+
+Manual verification
+1. Build/start the app as in LME-9 and ensure you can access the Orders page.
+2. Use the Symbol/Side/Status filters and verify:
+   - URL query updates as you change filters, and reload preserves the same view.
+   - Status defaults to Open when first visiting without a query.
+   - Switching Symbol reloads orders and live subscriptions.
+3. Place an order and cancel an order:
+   - On success, a green toast appears with concise details (symbol, side, price, amount) and auto-dismisses.
+   - On validation/server error, a red toast appears with an actionable message and code; click Details to expand any payload.
+4. Verify repeated identical actions with the same idempotency key do not create duplicate toasts.
+
 ## API – Order Book (GET /api/orders)
 
 Authenticated endpoint protected by Sanctum and throttled. Returns the current order book for a symbol.

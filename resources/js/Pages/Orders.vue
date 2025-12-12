@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { reactive, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import axios from 'axios'
 import { Link } from '@inertiajs/vue3'
+import ToastHost from '../components/ToastHost.vue'
+import { useToasts } from '@/stores/toasts'
 
 type Asset = { symbol: string; amount: string; locked_amount: string }
 type Profile = { id: number; name: string; email: string; balance: string; assets: Asset[] }
@@ -101,6 +103,47 @@ const markEventProcessed = (key: string): boolean => {
   if (processedEventKeys.has(key)) return false
   processedEventKeys.add(key)
   return true
+}
+
+// Toasts service
+const toasts = useToasts()
+
+// URL <-> filters sync + last-used symbol
+const initFiltersFromUrl = () => {
+  try {
+    const params = new URLSearchParams(window.location.search)
+    const qsSymbol = params.get('symbol') as any
+    const qsSide = params.get('side') as any
+    const qsStatus = params.get('status')
+    const qsSearch = params.get('search')
+
+    // Default symbol from localStorage when no query provided
+    const lastSymbol = window.localStorage.getItem('lastSymbol') as any
+
+    if (qsSymbol === 'btc' || qsSymbol === 'eth' || qsSymbol === 'all') filters.symbol = qsSymbol
+    else if (lastSymbol === 'btc' || lastSymbol === 'eth') filters.symbol = lastSymbol
+
+    if (qsSide === 'buy' || qsSide === 'sell' || qsSide === 'all') filters.side = qsSide
+
+    if (qsStatus === '1' || qsStatus === '2' || qsStatus === '3' || qsStatus === 'all') {
+      filters.status = (qsStatus === 'all' ? 'all' : (Number(qsStatus) as any))
+    } else {
+      // Default view shows open orders
+      filters.status = 1 as any
+    }
+
+    if (typeof qsSearch === 'string') filters.search = qsSearch
+  } catch {}
+}
+
+const pushFiltersToUrl = () => {
+  const params = new URLSearchParams()
+  params.set('symbol', String(filters.symbol))
+  params.set('side', String(filters.side))
+  params.set('status', String(filters.status))
+  if (filters.search.trim()) params.set('search', filters.search.trim())
+  const url = `${window.location.pathname}?${params.toString()}`
+  window.history.replaceState({}, '', url)
 }
 
 const fetchProfile = async () => {
@@ -227,6 +270,15 @@ const subscribeToEchoChannels = () => {
       try { Echo.leave(`private-user.${uid}`) } catch {}
     }
     userChannel = Echo.private(`private-user.${uid}`)
+    // Order placed (if backend emits)
+    userChannel.listen('.OrderPlaced', (event: any) => {
+      const key = event?.idempotency_key || (event?.order?.client_key ? `placed:${event.order.client_key}` : event?.order?.id ? `placed:${event.order.id}` : undefined)
+      const o = event?.order
+      const cleanSymbol = (o?.symbol || '').toString().toUpperCase()
+      const sideText = (o?.side || '').toString().toUpperCase()
+      const msg = o ? `Order placed: ${cleanSymbol} ${sideText} @ ${o.price} x ${o.amount}` : 'Order placed successfully.'
+      toasts.success({ message: msg, idempotencyKey: key })
+    })
     userChannel.listen('.OrderMatched', (event: any) => {
       // Idempotency by trade id
       const tradeKey = event?.trade_id ? `match:${event.trade_id}` : null
@@ -286,6 +338,16 @@ const subscribeToEchoChannels = () => {
       // Idempotency by order id
       const cancelKey = `cancel:${orderId}`
       if (!markEventProcessed(cancelKey)) return
+      // Toast success
+      try {
+        const order = state.open.find((o) => o.id === orderId) || state.history.find((o) => o.id === orderId)
+        const sym = (order?.symbol || event?.symbol || '').toString().toUpperCase()
+        const side = (order?.side || event?.side || '').toString().toUpperCase()
+        const price = order?.price || event?.price
+        const amount = order?.amount || event?.amount
+        const msg = `Order cancelled: ${sym} ${side}${price ? ` @ ${price}` : ''}${amount ? ` x ${amount}` : ''}`
+        toasts.success({ message: msg, idempotencyKey: cancelKey })
+      } catch {}
       // Patch wallet if provided
       const portfolioUpdate = event?.portfolio
       if (portfolioUpdate) {
@@ -334,6 +396,16 @@ const subscribeToEchoChannels = () => {
         if (!orderId) return
         const cancelKey = `cancel:${orderId}`
         if (!markEventProcessed(cancelKey)) return
+        // Toast success
+        try {
+          const order = state.open.find((o) => o.id === orderId) || state.history.find((o) => o.id === orderId)
+          const sym = (order?.symbol || event?.symbol || '').toString().toUpperCase()
+          const side = (order?.side || event?.side || '').toString().toUpperCase()
+          const price = order?.price || event?.price
+          const amount = order?.amount || event?.amount
+          const msg = `Order cancelled: ${sym} ${side}${price ? ` @ ${price}` : ''}${amount ? ` x ${amount}` : ''}`
+          toasts.success({ message: msg, idempotencyKey: cancelKey })
+        } catch {}
         // Apply the same cancellation patch logic
         const openIndex = state.open.findIndex((o) => o.id === orderId)
         if (openIndex >= 0) {
@@ -374,6 +446,9 @@ const handleSymbolFilterChange = async () => {
 }
 
 onMounted(async () => {
+  // Initialize filters from URL/localStorage
+  initFiltersFromUrl()
+  pushFiltersToUrl()
   await fetchInitialData()
   subscribeToEchoChannels()
   await nextTick()
@@ -402,10 +477,24 @@ onUnmounted(() => {
 })
 
 const headerBtnClass = 'px-2 py-1 cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-500 rounded'
+
+// Watch filters -> URL sync and side effects
+watch(
+  () => ({ ...filters }),
+  async (nv, ov) => {
+    pushFiltersToUrl()
+    // Persist symbol
+    try { if (filters.symbol && filters.symbol !== 'all') window.localStorage.setItem('lastSymbol', filters.symbol) } catch {}
+    // When symbol changes, refetch orders and resubscribe
+    if (!ov || nv.symbol !== (ov as any).symbol) await handleSymbolFilterChange()
+  },
+  { deep: true }
+)
 </script>
 
 <template>
   <div class="p-6">
+    <ToastHost />
     <h1 class="text-2xl font-bold mb-1">Orders &amp; Wallet</h1>
     <p class="text-gray-600 mb-4">Monitor your balances and manage open orders.</p>
 
@@ -507,7 +596,17 @@ const headerBtnClass = 'px-2 py-1 cursor-pointer focus:outline-none focus:ring-2
                       <td class="py-1 pr-2">{{ o.price }}</td>
                       <td class="py-1 pr-2">{{ o.amount }}</td>
                       <td class="py-1 pr-2">{{ o.remaining }}</td>
-                      <td class="py-1 pr-2">{{ o.status === 1 ? 'OPEN' : o.status === 2 ? 'FILLED' : 'CANCELLED' }}</td>
+                      <td class="py-1 pr-2">
+                        <span
+                          class="px-2 py-0.5 rounded text-xs font-semibold"
+                          :class="{
+                            'bg-green-100 text-green-800': o.status === 1,
+                            'bg-blue-100 text-blue-800': o.status === 2,
+                            'bg-gray-200 text-gray-800': o.status === 3,
+                          }"
+                          >{{ o.status === 1 ? 'OPEN' : o.status === 2 ? 'FILLED' : 'CANCELLED' }}</span
+                        >
+                      </td>
                     </tr>
                   </tbody>
                 </table>
@@ -550,7 +649,16 @@ const headerBtnClass = 'px-2 py-1 cursor-pointer focus:outline-none focus:ring-2
                       <td class="py-1 pr-2" :class="getSideColorClass(o.side)">{{ o.side.toUpperCase() }}</td>
                       <td class="py-1 pr-2">{{ o.price }}</td>
                       <td class="py-1 pr-2">{{ o.amount }}</td>
-                      <td class="py-1 pr-2">{{ o.status === 2 ? 'FILLED' : 'CANCELLED' }}</td>
+                      <td class="py-1 pr-2">
+                        <span
+                          class="px-2 py-0.5 rounded text-xs font-semibold"
+                          :class="{
+                            'bg-blue-100 text-blue-800': o.status === 2,
+                            'bg-gray-200 text-gray-800': o.status === 3,
+                          }"
+                          >{{ o.status === 2 ? 'FILLED' : 'CANCELLED' }}</span
+                        >
+                      </td>
                     </tr>
                   </tbody>
                 </table>
