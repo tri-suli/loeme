@@ -5,6 +5,7 @@ namespace App\Http\Controllers\API;
 use App\Enums\Crypto;
 use App\Enums\OrderSide;
 use App\Enums\OrderStatus;
+use App\Events\OrderCancelled;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Order\StoreOrderRequest;
 use App\Http\Resources\Order\OrderResource;
@@ -232,6 +233,139 @@ class OrdersController extends Controller
         app(MatchingService::class)->tryMatch($order);
 
         return new OrderResource($order->fresh());
+    }
+
+    /**
+     * POST /api/orders/{id}/cancel – Cancel an open order with transactional safety and idempotency.
+     */
+    public function cancel(Request $request, int $id): JsonResponse
+    {
+        $user = $request->user();
+
+        $result = DB::transaction(function () use ($user, $id) {
+            /** @var Order|null $order */
+            $order = Order::query()
+                ->where('id', $id)
+                ->where('user_id', $user->id)
+                ->lockForUpdate()
+                ->first();
+
+            if (! $order) {
+                abort(404);
+            }
+
+            // Idempotent: if already filled or cancelled, return current state with no side effects
+            if ($order->status->isFilled() || $order->status->isCancelled()) {
+                $asset = Asset::query()
+                    ->where('user_id', $user->id)
+                    ->where('symbol', $order->symbol->value)
+                    ->first();
+
+                return [
+                    'order'     => $order,
+                    'portfolio' => [
+                        'balance' => (string) $user->balance,
+                        'asset'   => $asset ? [
+                            'symbol'        => $order->symbol->value,
+                            'amount'        => (string) $asset->amount,
+                            'locked_amount' => (string) $asset->locked_amount,
+                        ] : null,
+                    ],
+                    'broadcast' => null,
+                ];
+            }
+
+            // Open order: release locked funds/assets equivalent to remaining and mark as cancelled
+            $symbol = $order->symbol->value;
+            $remaining = (string) $order->remaining;
+            $side = $order->side;
+
+            $portfolio = [
+                'balance' => (string) $user->balance,
+                'asset'   => null,
+            ];
+
+            if ($side->isBuying()) {
+                // Refund reserved USD = price * remaining
+                $lockedUser = $user->newQuery()->whereKey($user->id)->lockForUpdate()->firstOrFail();
+                $releaseUsd = bcmul((string) $order->price, $remaining, 18);
+                $lockedUser->balance = $this->formatUsd(bcadd((string) $lockedUser->balance, $releaseUsd, 2));
+                $lockedUser->save();
+
+                $portfolio['balance'] = (string) $lockedUser->balance;
+            } else {
+                // Release crypto back from locked_amount
+                $asset = Asset::query()
+                    ->where('user_id', $user->id)
+                    ->where('symbol', $symbol)
+                    ->lockForUpdate()
+                    ->first();
+
+                if (! $asset) {
+                    // Create missing asset entry defensively
+                    $asset = new Asset([
+                        'user_id'       => $user->id,
+                        'symbol'        => $symbol,
+                        'amount'        => '0',
+                        'locked_amount' => '0',
+                    ]);
+                    $asset->save();
+                    // Re-lock created row
+                    $asset = Asset::query()
+                        ->where('user_id', $user->id)
+                        ->where('symbol', $symbol)
+                        ->lockForUpdate()
+                        ->firstOrFail();
+                }
+
+                // Safety: ensure we don't underflow locked_amount
+                $toRelease = $remaining;
+                if (bccomp((string) $asset->locked_amount, $toRelease, 18) < 0) {
+                    $toRelease = (string) $asset->locked_amount;
+                }
+
+                $asset->locked_amount = bcsub((string) $asset->locked_amount, $toRelease, 18);
+                $asset->amount = bcadd((string) $asset->amount, $toRelease, 18);
+                $asset->save();
+
+                $portfolio['asset'] = [
+                    'symbol'        => $symbol,
+                    'amount'        => (string) $asset->amount,
+                    'locked_amount' => (string) $asset->locked_amount,
+                ];
+            }
+
+            // Update order
+            $order->status = OrderStatus::CANCELLED;
+            $order->remaining = '0';
+            $order->save();
+
+            $broadcast = [
+                'order_id'  => $order->id,
+                'user_id'   => $user->id,
+                'symbol'    => $symbol,
+                'side'      => $side->value,
+                'price'     => (string) $order->price,
+                'status'    => OrderStatus::CANCELLED->value,
+                'portfolio' => $portfolio,
+            ];
+
+            return [
+                'order'     => $order,
+                'portfolio' => $portfolio,
+                'broadcast' => $broadcast,
+            ];
+        }, 3);
+
+        // Broadcast cancellation (portfolio and orderbook updates) after commit
+        if (! empty($result['broadcast'])) {
+            event(new OrderCancelled($result['broadcast']));
+        }
+
+        return response()->json([
+            'order'     => new OrderResource($result['order']->fresh()),
+            'portfolio' => $result['portfolio'],
+        ]);
     }
 
     private function formatUsd(string $value): string

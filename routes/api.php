@@ -13,4 +13,10 @@ Route::middleware('auth:sanctum')->group(function (Router $router) {
 
     $router->get('profile', ProfileController::class)->name('profile');
     $router->post('orders', [OrdersController::class, 'store'])->name('orders.store');
+
+    // Cancel order
+    $router->post('orders/{id}/cancel', [OrdersController::class, 'cancel'])
+        ->whereNumber('id')
+        ->middleware('throttle:30,1')
+        ->name('orders.cancel');
 });
