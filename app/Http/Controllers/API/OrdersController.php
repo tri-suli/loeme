@@ -10,6 +10,7 @@ use App\Http\Requests\Order\StoreOrderRequest;
 use App\Http\Resources\Order\OrderResource;
 use App\Models\Asset;
 use App\Models\Order;
+use App\Services\MatchingService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -84,7 +85,11 @@ class OrdersController extends Controller
             ]);
         });
 
-        return new OrderResource($order);
+        // Try to match immediately after order creation (full-match only)
+        // Matching is executed in its own transaction and will broadcast after commit
+        app(MatchingService::class)->tryMatch($order);
+
+        return new OrderResource($order->fresh());
     }
 
     private function formatUsd(string $value): string
