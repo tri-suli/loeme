@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive, computed, onMounted, ref, nextTick } from 'vue'
+import { reactive, computed, onMounted, onUnmounted, ref, nextTick } from 'vue'
 import axios from 'axios'
 import { Link } from '@inertiajs/vue3'
 
@@ -96,8 +96,69 @@ const loadProfile = async () => {
   }
 }
 
+let channel: any = null
+
+const subscribeToUserChannel = () => {
+  try {
+    const uid = state.profile?.id
+    // @ts-ignore
+    const Echo = (window as any).Echo
+    if (!uid || !Echo) return
+    if (channel) {
+      try { channel.stopListening('OrderMatched') } catch {}
+      try { Echo.leave(`private-user.${uid}`) } catch {}
+    }
+    channel = Echo.private(`private-user.${uid}`)
+    channel.listen('.OrderMatched', (evt: any) => {
+      // Payload includes buyer and seller sections; pick the one matching current user
+      const me = state.profile?.id
+      if (!me) return
+      const section = evt?.buyer_id === me ? evt?.buyer : evt?.seller
+      if (!section) return
+      // Update balance
+      if (section.balance) {
+        state.profile = {
+          ...(state.profile as any),
+          balance: section.balance,
+        }
+      }
+      // Update asset entry for the traded symbol
+      const sym = evt?.symbol
+      if (!sym) return
+      const assets = state.profile?.assets || []
+      const idx = assets.findIndex((a) => a.symbol === sym)
+      const nextAsset = section.asset
+      if (nextAsset) {
+        const updated = { symbol: nextAsset.symbol, amount: nextAsset.amount, locked_amount: nextAsset.locked_amount }
+        if (idx >= 0) {
+          assets.splice(idx, 1, updated)
+        } else {
+          assets.push(updated)
+        }
+      }
+    })
+  } catch (e) {
+    console.warn('Failed to subscribe to user channel', e)
+  }
+}
+
 onMounted(() => {
-  loadProfile().then(() => priceRef.value?.focus())
+  loadProfile().then(() => {
+    priceRef.value?.focus()
+    subscribeToUserChannel()
+  })
+})
+
+onUnmounted(() => {
+  try {
+    const uid = state.profile?.id
+    // @ts-ignore
+    const Echo = (window as any).Echo
+    if (uid && Echo) {
+      if (channel) channel.stopListening('OrderMatched')
+      Echo.leave(`private-user.${uid}`)
+    }
+  } catch {}
 })
 
 const focusFirstInvalid = async () => {
