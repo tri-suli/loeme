@@ -15,7 +15,7 @@ use Illuminate\Support\Str;
 class MatchingService
 {
     /**
-     * Commission rate as decimal string (1.5% = 0.015)
+     * Commission rate as a decimal string (1.5% = 0.015)
      */
     private const COMMISSION_RATE = '0.015';
 
@@ -52,15 +52,15 @@ class MatchingService
                 if ($side->isBuying()) {
                     // BUY matches first SELL with price <= buy.price
                     $oppositeQuery->where('price', '<=', (string) $freshNew->price)
-                        ->orderBy('price', 'asc')
-                        ->orderBy('created_at', 'asc')
-                        ->orderBy('id', 'asc');
+                        ->orderBy('price')
+                        ->orderBy('created_at')
+                        ->orderBy('id');
                 } else {
                     // SELL matches first BUY with price >= sell.price
                     $oppositeQuery->where('price', '>=', (string) $freshNew->price)
                         ->orderBy('price', 'desc')
-                        ->orderBy('created_at', 'asc')
-                        ->orderBy('id', 'asc');
+                        ->orderBy('created_at')
+                        ->orderBy('id');
                 }
 
                 /** @var Order|null $counter */
