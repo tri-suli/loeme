@@ -59,7 +59,7 @@ const sort = reactive({
 })
 
 // Decimal-safe comparator for positive decimal strings
-function decCompare(a: string, b: string): number {
+function compareDecimalStrings(a: string, b: string): number {
   if (a === b) return 0
   const [ai, af = ''] = a.split('.')
   const [bi, bf = ''] = b.split('.')
@@ -70,6 +70,37 @@ function decCompare(a: string, b: string): number {
   const ap = af.padEnd(len, '0')
   const bp = bf.padEnd(len, '0')
   return ap.localeCompare(bp)
+}
+
+// Decimal-safe subtraction using BigInt scaling (scale up to 18)
+function subtractDecimalStrings(a: string, b: string): string {
+  const SCALE = 18
+  const norm = (v: string) => {
+    const s = String(v || '0').trim()
+    if (!s.includes('.')) return { w: s.replace(/^\+/, ''), f: '' }
+    const [w, f] = s.split('.')
+    return { w: w.replace(/^\+/, ''), f }
+  }
+  const A = norm(a)
+  const B = norm(b)
+  const fa = (A.f || '').slice(0, SCALE).padEnd(SCALE, '0')
+  const fb = (B.f || '').slice(0, SCALE).padEnd(SCALE, '0')
+  const ia = (A.w || '0').replace(/^0+(?=\d)/, '') + fa
+  const ib = (B.w || '0').replace(/^0+(?=\d)/, '') + fb
+  let res = BigInt(ia || '0') - BigInt(ib || '0')
+  if (res < 0n) res = 0n
+  const s = res.toString().padStart(SCALE + 1, '0')
+  const whole = s.slice(0, -SCALE) || '0'
+  const frac = s.slice(-SCALE).replace(/0+$/, '')
+  return frac ? `${whole}.${frac}` : whole
+}
+
+// Idempotency tracking for processed events
+const processedEventKeys = new Set<string>()
+const markEventProcessed = (key: string): boolean => {
+  if (processedEventKeys.has(key)) return false
+  processedEventKeys.add(key)
+  return true
 }
 
 const fetchProfile = async () => {
@@ -112,11 +143,11 @@ const fetchMyOrders = async () => {
 const applySort = (rows: Order[]) => {
   const dir = sort.dir === 'asc' ? 1 : -1
   const field = sort.field
-  const copy = [...rows]
-  copy.sort((a, b) => {
+  const sortedRows = [...rows]
+  sortedRows.sort((a, b) => {
     let cmp = 0
     if (field === 'price' || field === 'amount' || field === 'remaining') {
-      cmp = decCompare(a[field] as string, b[field] as string)
+      cmp = compareDecimalStrings(a[field] as string, b[field] as string)
     } else if (field === 'created_at') {
       cmp = (a.created_at || '').localeCompare(b.created_at || '')
     } else if (field === 'symbol') {
@@ -130,7 +161,7 @@ const applySort = (rows: Order[]) => {
     }
     return dir * cmp
   })
-  return copy
+  return sortedRows
 }
 
 const filteredOpen = computed(() => {
@@ -173,7 +204,7 @@ const keyToggleSort = (field: typeof sort.field, e: KeyboardEvent) => {
   }
 }
 
-const sideClass = (side: string) => (side === 'buy' ? 'text-green-600' : 'text-red-600')
+const getSideColorClass = (side: string) => (side === 'buy' ? 'text-green-600' : 'text-red-600')
 
 const formattedUsd = computed(() => {
   const bal = state.profile?.balance ?? '0.00'
@@ -182,83 +213,169 @@ const formattedUsd = computed(() => {
   return `USD ${wc}.${f.padEnd(2, '0').slice(0, 2)}`
 })
 
-let channel: any = null
-const subscribeEcho = () => {
+let userChannel: any = null
+let orderbookChannel: any = null
+const subscribeToEchoChannels = () => {
   try {
     const uid = state.profile?.id
     // @ts-ignore
     const Echo = (window as any).Echo
     if (!uid || !Echo) return
-    if (channel) {
-      try { channel.stopListening('OrderMatched') } catch {}
+    if (userChannel) {
+      try { userChannel.stopListening('OrderMatched') } catch {}
+      try { userChannel.stopListening('OrderCancelled') } catch {}
       try { Echo.leave(`private-user.${uid}`) } catch {}
     }
-    channel = Echo.private(`private-user.${uid}`)
-    channel.listen('.OrderMatched', (evt: any) => {
-      const me = state.profile?.id
-      if (!me) return
-      const section = evt?.buyer_id === me ? evt?.buyer : evt?.seller
-      if (!section) return
+    userChannel = Echo.private(`private-user.${uid}`)
+    userChannel.listen('.OrderMatched', (event: any) => {
+      // Idempotency by trade id
+      const tradeKey = event?.trade_id ? `match:${event.trade_id}` : null
+      if (tradeKey && !markEventProcessed(tradeKey)) return
+      const currentUserId = state.profile?.id
+      if (!currentUserId) return
+      const participantSection = event?.buyer_id === currentUserId ? event?.buyer : event?.seller
+      if (!participantSection) return
       // Update wallet
-      if (section.balance) {
-        state.profile = { ...(state.profile as any), balance: section.balance }
+      if (participantSection.balance) {
+        state.profile = { ...(state.profile as any), balance: participantSection.balance }
       }
-      if (section.asset) {
-        const a = section.asset
-        const list = state.profile?.assets || []
-        const idx = list.findIndex((x) => x.symbol === a.symbol)
-        const next = { symbol: a.symbol, amount: a.amount, locked_amount: a.locked_amount }
-        if (idx >= 0) list.splice(idx, 1, next)
-        else list.push(next)
+      if (participantSection.asset) {
+        const assetData = participantSection.asset
+        const assetList = state.profile?.assets || []
+        const assetIndex = assetList.findIndex((x) => x.symbol === assetData.symbol)
+        const updatedAssetEntry = { symbol: assetData.symbol, amount: assetData.amount, locked_amount: assetData.locked_amount }
+        if (assetIndex >= 0) assetList.splice(assetIndex, 1, updatedAssetEntry)
+        else assetList.push(updatedAssetEntry)
       }
       // Update orders lists (full fills move from open to history)
-      const updatedId = section?.orders?.buy?.id || section?.orders?.sell?.id
-      const updatedStatus = section?.orders?.buy?.status || section?.orders?.sell?.status
-      if (updatedId) {
-        const oi = state.open.findIndex((o) => o.id === updatedId)
-        if (oi >= 0) {
-          const row = { ...state.open[oi], status: updatedStatus as any, remaining: '0' }
-          state.open.splice(oi, 1)
-          // Prepend to history
-          state.history.unshift(row)
+      const updatedOrderId = participantSection?.orders?.buy?.id || participantSection?.orders?.sell?.id
+      const updatedOrderStatus = participantSection?.orders?.buy?.status || participantSection?.orders?.sell?.status
+      if (updatedOrderId) {
+        // Try to locate order in open list
+        const openIndex = state.open.findIndex((o) => o.id === updatedOrderId)
+        if (openIndex >= 0) {
+          // If event has remaining value or trade amount, apply decrement safely; default to 0 when filled
+          const currentOrder = state.open[openIndex]
+          let nextRemainingAmount = currentOrder.remaining
+          if (updatedOrderStatus === 2) {
+            nextRemainingAmount = '0'
+          } else if (participantSection?.orders?.buy?.remaining || participantSection?.orders?.sell?.remaining) {
+            nextRemainingAmount = String(participantSection?.orders?.buy?.remaining || participantSection?.orders?.sell?.remaining)
+          } else if (event?.amount) {
+            nextRemainingAmount = subtractDecimalStrings(currentOrder.remaining, String(event.amount))
+          }
+          const updatedOrder = { ...currentOrder, status: updatedOrderStatus as any, remaining: nextRemainingAmount }
+          // If filled or cancelled, move to history, else patch in place
+          if (updatedOrder.status === 2 || updatedOrder.status === 3) {
+            state.open.splice(openIndex, 1)
+            state.history.unshift({ ...updatedOrder, remaining: updatedOrder.remaining })
+          } else {
+            state.open.splice(openIndex, 1, updatedOrder)
+          }
         } else {
           // If it was already not in open, patch history entry if exists
-          const hi = state.history.findIndex((o) => o.id === updatedId)
-          if (hi >= 0) state.history.splice(hi, 1, { ...state.history[hi], status: updatedStatus as any })
+          const historyIndex = state.history.findIndex((o) => o.id === updatedOrderId)
+          if (historyIndex >= 0) state.history.splice(historyIndex, 1, { ...state.history[historyIndex], status: updatedOrderStatus as any })
         }
       }
     })
     // If backend emits OrderCancelled, update lists accordingly
-    channel.listen('.OrderCancelled', (evt: any) => {
-      const id = evt?.order_id || evt?.id
-      if (!id) return
+    userChannel.listen('.OrderCancelled', (event: any) => {
+      const orderId = event?.order_id || event?.id
+      if (!orderId) return
+      // Idempotency by order id
+      const cancelKey = `cancel:${orderId}`
+      if (!markEventProcessed(cancelKey)) return
+      // Patch wallet if provided
+      const portfolioUpdate = event?.portfolio
+      if (portfolioUpdate) {
+        const nextProf: any = { ...(state.profile as any) }
+        if (portfolioUpdate.balance) nextProf.balance = portfolioUpdate.balance
+        if (portfolioUpdate.asset) {
+          const assetData = portfolioUpdate.asset
+          const assetList = nextProf.assets || []
+          const assetIndex = assetList.findIndex((x: any) => x.symbol === assetData.symbol)
+          const updatedAssetEntry = { symbol: assetData.symbol, amount: assetData.amount, locked_amount: assetData.locked_amount }
+          if (assetIndex >= 0) assetList.splice(assetIndex, 1, updatedAssetEntry)
+          else assetList.push(updatedAssetEntry)
+          nextProf.assets = assetList
+        }
+        state.profile = nextProf
+      }
       // Move from open to history as cancelled
-      const oi = state.open.findIndex((o) => o.id === id)
-      if (oi >= 0) {
-        const row = { ...state.open[oi], status: 3 as any }
-        state.open.splice(oi, 1)
-        state.history.unshift(row)
+      const openIndex = state.open.findIndex((o) => o.id === orderId)
+      if (openIndex >= 0) {
+        const updatedOrder = { ...state.open[openIndex], status: 3 as any, remaining: '0' }
+        state.open.splice(openIndex, 1)
+        state.history.unshift(updatedOrder)
       } else {
-        const hi = state.history.findIndex((o) => o.id === id)
-        if (hi >= 0) state.history.splice(hi, 1, { ...state.history[hi], status: 3 as any })
+        const historyIndex = state.history.findIndex((o) => o.id === orderId)
+        if (historyIndex >= 0) state.history.splice(historyIndex, 1, { ...state.history[historyIndex], status: 3 as any, remaining: '0' })
       }
     })
+
+    // Subscribe to orderbook channel for current symbol filter (if not 'all')
+    const selectedSymbol = filters.symbol
+    if (selectedSymbol && selectedSymbol !== 'all') {
+      if (orderbookChannel) {
+        try { orderbookChannel.stopListening('OrderCancelled') } catch {}
+        try {
+          const prevName = orderbookChannel?.name
+          if (prevName) Echo.leave(prevName)
+        } catch {}
+      }
+      orderbookChannel = Echo.private(`orderbook.${selectedSymbol}`)
+      orderbookChannel.listen('.OrderCancelled', (event: any) => {
+        // Only apply if it is my order
+        const currentUserId = state.profile?.id
+        if (!currentUserId) return
+        if ((event?.user_id || event?.owner_id) !== currentUserId) return
+        const orderId = event?.order_id || event?.id
+        if (!orderId) return
+        const cancelKey = `cancel:${orderId}`
+        if (!markEventProcessed(cancelKey)) return
+        // Apply the same cancellation patch logic
+        const openIndex = state.open.findIndex((o) => o.id === orderId)
+        if (openIndex >= 0) {
+          const updatedOrder = { ...state.open[openIndex], status: 3 as any, remaining: '0' }
+          state.open.splice(openIndex, 1)
+          state.history.unshift(updatedOrder)
+        } else {
+          const historyIndex = state.history.findIndex((o) => o.id === orderId)
+          if (historyIndex >= 0) state.history.splice(historyIndex, 1, { ...state.history[historyIndex], status: 3 as any, remaining: '0' })
+        }
+      })
+    } else if (orderbookChannel && Echo) {
+      // If switched to 'all', leave any previous orderbook channel
+      try { orderbookChannel.stopListening('OrderCancelled') } catch {}
+      try { Echo.leaveChannel ? Echo.leaveChannel(orderbookChannel.name) : Echo.leave(orderbookChannel.name) } catch {}
+      orderbookChannel = null
+    }
   } catch (e) {
     console.warn('Echo subscribe failed', e)
   }
 }
 
-const refreshAll = async () => {
+const fetchInitialData = async () => {
   await Promise.all([fetchProfile(), fetchMyOrders()])
 }
 
-const symbolChanged = async () => {
+const handleSymbolFilterChange = async () => {
   await fetchMyOrders()
+  // Re-subscribe orderbook channel for the new symbol
+  try {
+    const uid = state.profile?.id
+    // @ts-ignore
+    const Echo = (window as any).Echo
+    if (!Echo || !uid) return
+    // Reuse subscribeToEchoChannels to refresh both private-user and orderbook channels
+    subscribeToEchoChannels()
+  } catch {}
 }
 
 onMounted(async () => {
-  await refreshAll()
-  subscribeEcho()
+  await fetchInitialData()
+  subscribeToEchoChannels()
   await nextTick()
 })
 
@@ -268,11 +385,18 @@ onUnmounted(() => {
     // @ts-ignore
     const Echo = (window as any).Echo
     if (uid && Echo) {
-      if (channel) {
-        try { channel.stopListening('OrderMatched') } catch {}
-        try { channel.stopListening('OrderCancelled') } catch {}
+      if (userChannel) {
+        try { userChannel.stopListening('OrderMatched') } catch {}
+        try { userChannel.stopListening('OrderCancelled') } catch {}
       }
       Echo.leave(`private-user.${uid}`)
+      if (orderbookChannel) {
+        try { orderbookChannel.stopListening('OrderCancelled') } catch {}
+        try {
+          const name = orderbookChannel?.name || (filters.symbol !== 'all' ? `orderbook.${filters.symbol}` : null)
+          if (name) Echo.leave(name)
+        } catch {}
+      }
     }
   } catch {}
 })
@@ -319,7 +443,7 @@ const headerBtnClass = 'px-2 py-1 cursor-pointer focus:outline-none focus:ring-2
           <div class="flex flex-wrap gap-2 items-end">
             <div>
               <label class="block text-sm font-medium">Symbol</label>
-              <select v-model="filters.symbol" @change="symbolChanged" class="border rounded px-2 py-1">
+              <select v-model="filters.symbol" @change="handleSymbolFilterChange" class="border rounded px-2 py-1">
                 <option v-for="s in symbols" :key="s.value" :value="s.value">{{ s.label }}</option>
               </select>
             </div>
@@ -340,7 +464,7 @@ const headerBtnClass = 'px-2 py-1 cursor-pointer focus:outline-none focus:ring-2
               <input v-model="filters.search" class="border rounded px-2 py-1 w-full" placeholder="Order id / price / amount" />
             </div>
             <div class="ml-auto">
-              <button class="px-3 py-1 border rounded" @click="refreshAll">Refresh</button>
+              <button class="px-3 py-1 border rounded" @click="fetchInitialData">Refresh</button>
             </div>
           </div>
 
@@ -379,7 +503,7 @@ const headerBtnClass = 'px-2 py-1 cursor-pointer focus:outline-none focus:ring-2
                     <tr v-for="o in filteredOpen" :key="o.id" class="border-t">
                       <td class="py-1 pr-2 whitespace-nowrap">{{ o.created_at?.replace('T',' ').replace('Z','') }}</td>
                       <td class="py-1 pr-2">{{ o.symbol.toUpperCase() }}</td>
-                      <td class="py-1 pr-2" :class="sideClass(o.side)">{{ o.side.toUpperCase() }}</td>
+                      <td class="py-1 pr-2" :class="getSideColorClass(o.side)">{{ o.side.toUpperCase() }}</td>
                       <td class="py-1 pr-2">{{ o.price }}</td>
                       <td class="py-1 pr-2">{{ o.amount }}</td>
                       <td class="py-1 pr-2">{{ o.remaining }}</td>
@@ -423,7 +547,7 @@ const headerBtnClass = 'px-2 py-1 cursor-pointer focus:outline-none focus:ring-2
                     <tr v-for="o in filteredHistory" :key="o.id" class="border-t">
                       <td class="py-1 pr-2 whitespace-nowrap">{{ o.created_at?.replace('T',' ').replace('Z','') }}</td>
                       <td class="py-1 pr-2">{{ o.symbol.toUpperCase() }}</td>
-                      <td class="py-1 pr-2" :class="sideClass(o.side)">{{ o.side.toUpperCase() }}</td>
+                      <td class="py-1 pr-2" :class="getSideColorClass(o.side)">{{ o.side.toUpperCase() }}</td>
                       <td class="py-1 pr-2">{{ o.price }}</td>
                       <td class="py-1 pr-2">{{ o.amount }}</td>
                       <td class="py-1 pr-2">{{ o.status === 2 ? 'FILLED' : 'CANCELLED' }}</td>
