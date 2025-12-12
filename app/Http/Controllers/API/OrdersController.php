@@ -368,6 +368,62 @@ class OrdersController extends Controller
         ]);
     }
 
+    /**
+     * GET /api/my/orders – Current user's open orders and recent history.
+     * Query params:
+     * - symbol (optional): filter by symbol (btc, eth, ...)
+     * - limit (optional): history limit (default 50, max 200)
+     */
+    public function my(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        $symbol = $request->query('symbol');
+        if (is_string($symbol) && $symbol !== '') {
+            $symbol = strtolower(trim($symbol));
+        } else {
+            $symbol = null;
+        }
+
+        $limit = (int) ($request->query('limit', 50));
+        if ($limit <= 0) {
+            $limit = 1;
+        }
+        if ($limit > 200) {
+            $limit = 200;
+        }
+
+        $openQuery = Order::query()
+            ->where('user_id', $user->id)
+            ->where('status', OrderStatus::OPEN)
+            ->orderBy('created_at', 'asc')
+            ->orderBy('id', 'asc');
+
+        $historyQuery = Order::query()
+            ->where('user_id', $user->id)
+            ->whereIn('status', [OrderStatus::FILLED, OrderStatus::CANCELLED])
+            ->orderBy('created_at', 'desc')
+            ->orderBy('id', 'desc')
+            ->limit($limit);
+
+        if ($symbol) {
+            $openQuery->where('symbol', $symbol);
+            $historyQuery->where('symbol', $symbol);
+        }
+
+        $open = $openQuery->get();
+        $history = $historyQuery->get();
+
+        // Use resources to ensure consistent string decimals and enums
+        $openArr = OrderResource::collection($open)->resolve();
+        $historyArr = OrderResource::collection($history)->resolve();
+
+        return response()->json([
+            'open'    => $openArr,
+            'history' => $historyArr,
+        ]);
+    }
+
     private function formatUsd(string $value): string
     {
         // Ensure we keep at least 2 decimals for USD storage
