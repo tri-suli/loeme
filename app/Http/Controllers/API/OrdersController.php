@@ -11,11 +11,153 @@ use App\Http\Resources\Order\OrderResource;
 use App\Models\Asset;
 use App\Models\Order;
 use App\Services\MatchingService;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 
 class OrdersController extends Controller
 {
+    /**
+     * GET /api/orders – Order book endpoint.
+     *
+     * Query params:
+     * - symbol (required): string crypto symbol (case-insensitive), e.g. BTC, ETH
+     * - limit (optional): int number of price levels or raw orders per side (default 100, max 1000)
+     * - raw (optional): bool, when true returns individual orders; otherwise aggregated by price level
+     *
+     * Response (aggregated):
+     * {
+     *   bids: [{ price: string, amount: string }],
+     *   asks: [{ price: string, amount: string }]
+     * }
+     *
+     * Response (raw=true):
+     * {
+     *   bids: [{ id: int, price: string, remaining: string, created_at: string }],
+     *   asks: [{ id: int, price: string, remaining: string, created_at: string }]
+     * }
+     */
+    public function index(Request $request): JsonResponse
+    {
+        $startedAt = microtime(true);
+
+        // Normalize and validate inputs
+        $symbolInput = (string) $request->query('symbol', '');
+        $symbol = strtolower(trim($symbolInput));
+
+        if ($symbol === '' || ! in_array($symbol, Crypto::values(), true)) {
+            throw ValidationException::withMessages([
+                'symbol' => 'Invalid or unsupported symbol.',
+            ]);
+        }
+
+        $raw = $request->boolean('raw');
+        $limit = (int) ($request->query('limit', 100));
+        if ($limit <= 0) {
+            $limit = 1;
+        }
+        if ($limit > 1000) {
+            $limit = 1000;
+        }
+
+        // Consistent read snapshot (no explicit locks)
+        $result = DB::transaction(function () use ($symbol, $raw, $limit) {
+            if ($raw) {
+                // RAW mode: individual open orders ordered by price priority and FIFO by id
+                $bids = Order::query()
+                    ->select(['id', 'price', 'remaining', 'created_at'])
+                    ->where('symbol', $symbol)
+                    ->where('status', OrderStatus::OPEN)
+                    ->where('side', OrderSide::BUY)
+                    ->orderBy('price', 'desc')
+                    ->orderBy('created_at', 'asc')
+                    ->orderBy('id', 'asc')
+                    ->limit($limit)
+                    ->get()
+                    ->map(static function (Order $o) {
+                        return [
+                            'id'         => $o->id,
+                            'price'      => (string) $o->price,
+                            'remaining'  => (string) $o->remaining,
+                            'created_at' => $o->created_at?->toIso8601String(),
+                        ];
+                    })
+                    ->values();
+
+                $asks = Order::query()
+                    ->select(['id', 'price', 'remaining', 'created_at'])
+                    ->where('symbol', $symbol)
+                    ->where('status', OrderStatus::OPEN)
+                    ->where('side', OrderSide::SELL)
+                    ->orderBy('price', 'asc')
+                    ->orderBy('created_at', 'asc')
+                    ->orderBy('id', 'asc')
+                    ->limit($limit)
+                    ->get()
+                    ->map(static function (Order $o) {
+                        return [
+                            'id'         => $o->id,
+                            'price'      => (string) $o->price,
+                            'remaining'  => (string) $o->remaining,
+                            'created_at' => $o->created_at?->toIso8601String(),
+                        ];
+                    })
+                    ->values();
+
+                return ['bids' => $bids, 'asks' => $asks];
+            }
+
+            // Aggregated mode: group by price level and sum remaining
+            $bids = Order::query()
+                ->selectRaw('price, SUM(remaining) as amount')
+                ->where('symbol', $symbol)
+                ->where('status', OrderStatus::OPEN)
+                ->where('side', OrderSide::BUY)
+                ->groupBy('price')
+                ->orderBy('price', 'desc')
+                ->limit($limit)
+                ->get()
+                ->map(static fn ($row) => [
+                    'price'  => (string) $row->price,
+                    'amount' => (string) $row->amount,
+                ])
+                ->values();
+
+            $asks = Order::query()
+                ->selectRaw('price, SUM(remaining) as amount')
+                ->where('symbol', $symbol)
+                ->where('status', OrderStatus::OPEN)
+                ->where('side', OrderSide::SELL)
+                ->groupBy('price')
+                ->orderBy('price', 'asc')
+                ->limit($limit)
+                ->get()
+                ->map(static fn ($row) => [
+                    'price'  => (string) $row->price,
+                    'amount' => (string) $row->amount,
+                ])
+                ->values();
+
+            return ['bids' => $bids, 'asks' => $asks];
+        }, 1);
+
+        $durationMs = (int) round((microtime(true) - $startedAt) * 1000);
+        Log::info('orders.book.fetch', [
+            'symbol'   => $symbol,
+            'raw'      => $raw,
+            'limit'    => $limit,
+            'duration' => $durationMs . 'ms',
+            'metric'   => [
+                'orders.book.fetch.count'    => 1,
+                'orders.book.fetch.duration' => $durationMs,
+            ],
+        ]);
+
+        return response()->json($result);
+    }
+
     public function store(StoreOrderRequest $request): OrderResource
     {
         $user = $request->user();
