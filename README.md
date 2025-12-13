@@ -139,11 +139,15 @@ Notes
 - Events: broadcast after commit to avoid phantom updates; payloads include only necessary fields
 
 ## Trading commissions
-- Current behavior: commissions default to 0% (no fees applied).
-- Planned/optional model: maker/taker percentages per symbol applied at settlement time.
-  - Fee calculation example: fee = traded_amount × price × rate; round down to fee scale.
-  - Settlement: deduct fee from proceeds for seller or from base currency for buyer depending on policy; store on trade record.
-- Configuration (suggested): environment variables like FEES_MAKER_BPS/FEES_TAKER_BPS per symbol; enforced in matching job when recording trades.
+- Commission: 1.5% of matched USD notional (must stay per requirements).
+- Policy: buyer pays in quote currency (USD) consistently.
+  - Calculation: fee = amount × price × 0.015; rounded down to 2 decimals (USD cents).
+  - Settlement (atomic in the matching transaction):
+    - Buyer: total USD debit equals gross + fee.
+    - Seller: credited gross USD proceeds (no fee deducted on seller).
+    - Platform: USD balance credited by the fee amount to the platform account (email: platform@loeme.local).
+  - Persistence: each Trade row stores fee_amount, fee_currency, and fee_payer.
+  - Conservation: buyer USD debit == seller USD credit + platform USD fee credit.
 
 ## Real‑time integration
 This project uses Laravel Broadcasting with Pusher‑compatible websockets and a Vue 3 SPA using Laravel Echo. Private channels are authorized via Sanctum session auth.
