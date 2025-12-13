@@ -25,6 +25,9 @@ class TradeFactory extends Factory
             'symbol'        => Crypto::BTC->value,
             'price'         => $this->faker->randomFloat(2, 1, 10000),
             'amount'        => $this->faker->randomFloat(2, 1, 10000),
+            'fee_amount'    => 0,
+            'fee_currency'  => 'USD',
+            'fee_payer'     => 'seller',
             'executed_at'   => now(),
         ];
     }

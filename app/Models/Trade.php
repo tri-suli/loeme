@@ -21,6 +21,9 @@ class Trade extends Model
         'symbol',
         'price',
         'amount',
+        'fee_amount',
+        'fee_currency',
+        'fee_payer',
         'executed_at',
     ];
 
@@ -30,9 +33,11 @@ class Trade extends Model
     protected function casts(): array
     {
         return [
-            'symbol'      => Crypto::class,
-            'price'       => 'decimal:18',
-            'amount'      => 'decimal:18',
+            'symbol' => Crypto::class,
+            'price'  => 'decimal:18',
+            'amount' => 'decimal:18',
+            // Fees are in quote currency (USD) and stored/displayed to 2 decimals
+            'fee_amount'  => 'decimal:2',
             'executed_at' => 'datetime',
         ];
     }
