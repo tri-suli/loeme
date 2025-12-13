@@ -19,6 +19,11 @@ class OrderCancelled implements ShouldBroadcast
     public bool $afterCommit = true;
 
     /**
+     * Queue name for broadcasting job.
+     */
+    public string $broadcastQueue = 'broadcasts';
+
+    /**
      * @param  array<string, mixed>  $payload
      */
     public function __construct(public array $payload) {}
@@ -32,7 +37,11 @@ class OrderCancelled implements ShouldBroadcast
         $symbol = (string) ($this->payload['symbol'] ?? '');
 
         return [
+            // Legacy user channel
             new PrivateChannel('private-user.' . $userId),
+            // Portfolio updates per user
+            new PrivateChannel('portfolio.' . $userId),
+            // Order book updates per symbol
             new PrivateChannel('orderbook.' . strtolower($symbol)),
         ];
     }
