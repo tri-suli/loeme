@@ -1,12 +1,8 @@
 import './bootstrap';
+import './echo';
 import { createApp, h } from 'vue';
 import { createInertiaApp } from '@inertiajs/vue3';
 import { resolvePageComponent } from 'laravel-vite-plugin/inertia-helpers';
-import { configureEcho } from '@laravel/echo-vue';
-
-configureEcho({
-    broadcaster: 'pusher',
-});
 
 createInertiaApp({
     resolve: (name) =>
