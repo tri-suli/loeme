@@ -7,10 +7,10 @@ use App\Enums\OrderStatus;
 use App\Events\OrderMatched;
 use App\Models\Asset;
 use App\Models\Order;
+use App\Models\Trade;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Str;
 
 class MatchingService
 {
@@ -158,15 +158,38 @@ class MatchingService
                 $seller->balance = $this->formatUsd(bcadd((string) $seller->balance, $sellerProceeds, 2));
                 $seller->save();
 
-                // Prepare broadcast payload
-                $tradeId = (string) Str::uuid();
+                // Persist trade (idempotent) and prepare broadcast payload
+                $buyOrderId = $side->isBuying() ? $freshNew->id : $counter->id;
+                $sellOrderId = $side->isBuying() ? $counter->id : $freshNew->id;
+                $tradeUid = hash('sha256', implode('|', [
+                    $symbol,
+                    (string) $buyOrderId,
+                    (string) $sellOrderId,
+                    $executionPrice,
+                    $amount,
+                ]));
+
+                $trade = Trade::query()->firstOrCreate(
+                    [
+                        'trade_uid' => $tradeUid,
+                    ],
+                    [
+                        'buy_order_id'  => $buyOrderId,
+                        'sell_order_id' => $sellOrderId,
+                        'symbol'        => $symbol,
+                        'price'         => $executionPrice,
+                        'amount'        => $amount,
+                        'executed_at'   => now(),
+                    ]
+                );
+
                 $payload = [
-                    'trade_id'      => $tradeId,
+                    'trade_id'      => $trade->trade_uid,
                     'symbol'        => $symbol,
                     'price'         => $executionPrice,
                     'amount'        => $amount,
-                    'buy_order_id'  => $side->isBuying() ? $freshNew->id : $counter->id,
-                    'sell_order_id' => $side->isBuying() ? $counter->id : $freshNew->id,
+                    'buy_order_id'  => $buyOrderId,
+                    'sell_order_id' => $sellOrderId,
                     'buyer_id'      => $buyer->id,
                     'seller_id'     => $seller->id,
                     'commission'    => $commission,
@@ -179,7 +202,7 @@ class MatchingService
                         ],
                         'orders' => [
                             'buy' => [
-                                'id'     => $side->isBuying() ? $freshNew->id : $counter->id,
+                                'id'     => $buyOrderId,
                                 'status' => OrderStatus::FILLED->value,
                             ],
                         ],
@@ -193,7 +216,7 @@ class MatchingService
                         ],
                         'orders' => [
                             'sell' => [
-                                'id'     => $side->isBuying() ? $counter->id : $freshNew->id,
+                                'id'     => $sellOrderId,
                                 'status' => OrderStatus::FILLED->value,
                             ],
                         ],
