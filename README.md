@@ -1,215 +1,176 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# Limit‑Order Exchange Mini Engine (Laravel + Vue 3)
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+## Overview
+A compact limit‑order exchange engine with a Laravel API and a Vue 3 SPA. It supports price‑time priority matching, precise decimal accounting, row‑level locking for concurrency safety, and real‑time updates via Pusher‑compatible websockets. Authentication uses Laravel Sanctum. All money/amount values are represented as strings/decimals to avoid floating‑point errors.
 
-## About Laravel
+## Tech stack
+- Backend: Laravel 12.x (laravel/framework ^12.0), PHP 8.3+ (bcmath, intl), Redis (queues/cache), MySQL 8+ or PostgreSQL 14+
+- Frontend: Vue 3.5.x (^3.5.25) with Vite (Composition API, TypeScript), Axios, Laravel Echo
+- Realtime: Pusher SaaS or compatible server (Laravel WebSockets / Reverb)
+- Testing: PHPUnit 11.x (^11.5.3), Vitest + Vue Test Utils
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+## Main features
+- Limit orders: buy/sell with price‑time priority and FIFO within price level
+- Matching engine with transactional locking and precise decimals (no floats)
+- Balance/asset locking on order placement; atomic release on cancel/fill
+- Order book API (aggregated or raw) with fast indexed queries
+- Idempotent order placement/cancel via client/server keys
+- Real‑time broadcasting of portfolio and order book updates
+- Secure private channels (Sanctum) and rate-limited endpoints
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+## High‑level architecture
+- API (Laravel)
+  - Controllers expose endpoints for profile, order book, place/cancel orders
+  - Jobs queue per symbol handle matching to serialize execution
+  - Events (ShouldBroadcast, afterCommit) emit order/portfolio/book updates
+  - Repositories/Models encapsulate decimal math with bcmath/BigDecimal
+- SPA (Vue 3)
+  - Authenticated pages for trading, orders, and portfolio
+  - Laravel Echo subscribes to private channels for live updates
+- Data stores
+  - MySQL/PostgreSQL for primary data
+  - Redis for queues/cache/rate limiting
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+Flow (simplified)
 
-## Learning Laravel
+```
+Client → POST /api/orders ──▶ DB txn (lock balances/assets) ──▶ enqueue OrderPlaced[symbol]
+                      ▲                                               │
+                      │                                               ▼
+          Echo portfolio.{userId} ◀── match loop ── trades/cancels ──▶ Echo orderbook.{symbol}
+```
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework. You can also check out [Laravel Learn](https://laravel.com/learn), where you will be guided through building a modern Laravel application.
+## Database schema (minimum)
+- users: standard Laravel users + balance DECIMAL(20,8) UNSIGNED DEFAULT 0
+- assets: id, user_id FK, symbol VARCHAR(20), amount DECIMAL(36,18) DEFAULT 0, locked_amount DECIMAL(36,18) DEFAULT 0, UNIQUE(user_id, symbol)
+- orders: id, user_id FK, symbol VARCHAR(20), side ENUM('buy','sell'), price DECIMAL(36,18), amount DECIMAL(36,18), remaining DECIMAL(36,18), status TINYINT (1=open,2=filled,3=cancelled), created_at indexed, updated_at
+- trades: id, buy_order_id, sell_order_id, symbol, price DECIMAL(36,18), amount DECIMAL(36,18), executed_at
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+Indexes
+- orders: (symbol, status), (symbol, side, price DESC, id ASC), (symbol, side, price ASC, id ASC)
+- assets: UNIQUE(user_id, symbol)
 
-## Laravel Sponsors
+Precision
+- Use DECIMAL in DB and string‑backed decimals in PHP/JS; never cast to float
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
+## API endpoints
 
-### Premium Partners
+### GET /api/profile
+Returns balances and assets for the authenticated user.
 
-- **[Vehikl](https://vehikl.com)**
-- **[Tighten Co.](https://tighten.co)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Redberry](https://redberry.international/laravel-development)**
-- **[Active Logic](https://activelogic.com)**
-
-## Contributing
-
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
-
-## Code of Conduct
-
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
-
-## Security Vulnerabilities
-
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
-
-## License
-
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
-
-## Frontend – Live Orders Patching (LME-9)
-
-This project implements live, in-place patching of the Orders list in the SPA using Laravel Echo (Pusher compatible).
-
-- Subscriptions
-  - private-user.{userId}: receives OrderMatched and OrderCancelled events relevant to the authenticated user.
-  - orderbook.{symbol}: listens for OrderCancelled per selected symbol (filters.symbol) to reflect cancellations promptly.
-- Behavior
-  - OrderMatched: updates wallet (USD and asset), sets affected order status to filled and moves it from Open to History.
-  - OrderCancelled: marks order as cancelled, moves it from Open to History, and applies portfolio release details.
-  - Idempotency: duplicate events are ignored (trade_id for matches; order id for cancellations).
-  - Sorting/filters: preserved across live updates; lists are re-computed with the current sort and filter state.
-  - Cleanup: channels are unsubscribed on component unmount and re-subscribed when the symbol filter changes.
-
-Manual verification (seeded backend)
-1. Ensure your .env has valid Pusher (or Laravel WebSockets) config, and you are authenticated in the SPA.
-2. In separate terminals:
-   - php artisan queue:work
-   - php artisan serve
-   - If self-hosting websockets: php artisan websockets:serve
-3. Open the Orders page (/orders). Keep it open.
-4. Place a matching counter-order from another browser session or using the Trade page (/trade).
-5. Observe without refresh:
-   - Wallet balance/assets update.
-   - The matched order moves to History with status FILLED.
-6. Cancel an open order (from Orders or via POST /api/orders/{id}/cancel) and observe it moves to History with status CANCELLED and wallet reflects released funds/assets.
-
-## Frontend – Order filtering and toasts/alerts (LME-10)
-
-Implements filter controls for the Orders page with URL query persistence and a centralized toast/alert system with accessibility and de-duplication.
-
-- Filters (Orders page)
-  - Controls: Symbol (All/BTC/ETH), Side (All/Buy/Sell), Status (All/Open/Filled/Cancelled), and text Search.
-  - Persistence: The current filters are reflected in the page URL query string (symbol, side, status, search) and update reactively without full page reloads.
-  - Defaults: If no query is provided, Status defaults to Open. The last-used Symbol is remembered in localStorage.
-  - Behavior: Filters are applied client-side to the loaded Open and Recent History lists; changing Symbol triggers a reload of orders and re-subscription to orderbook events for the selected symbol.
-  - Accessibility: Native select and input controls with labels; sortable headers are keyboard-activatable (Enter/Space) with visible focus rings. Side coloring: buy=green, sell=red. Status badges are styled and color-coded.
-
-- Toasts/Alerts
-  - Centralized store at resources/js/stores/toasts.ts and UI host component at resources/js/components/ToastHost.vue.
-  - Usage: The Orders page imports and renders <ToastHost /> so notifications appear globally on that view.
-  - Types: success, error, info. Success is used for order placement/cancel; error is used for API and validation/server failures.
-  - De-duplication: Toasts use an idempotencyKey when available (e.g., OrderPlaced client key, order id for cancellations, or HTTP method+URL+status); duplicates are ignored.
-  - Auto-dismiss: Success/info dismiss after ~5s; error after ~8s. Users can dismiss toasts manually via keyboard or mouse.
-  - Accessibility: An ARIA live region announces the newest toast to screen readers. Each toast uses role="status" and provides a Dismiss control with proper focus styles.
-
-- Integration
-  - Axios interceptor (resources/js/bootstrap.js) captures HTTP errors and shows an error toast automatically.
-  - Laravel Echo events (private-user.{id}, orderbook.{symbol}) show success toasts for OrderPlaced and OrderCancelled, while updates to wallet and orders remain live and idempotent.
-
-Manual verification
-1. Build/start the app as in LME-9 and ensure you can access the Orders page.
-2. Use the Symbol/Side/Status filters and verify:
-   - URL query updates as you change filters, and reload preserves the same view.
-   - Status defaults to Open when first visiting without a query.
-   - Switching Symbol reloads orders and live subscriptions.
-3. Place an order and cancel an order:
-   - On success, a green toast appears with concise details (symbol, side, price, amount) and auto-dismisses.
-   - On validation/server error, a red toast appears with an actionable message and code; click Details to expand any payload.
-4. Verify repeated identical actions with the same idempotency key do not create duplicate toasts.
-
-## API – Order Book (GET /api/orders)
-
-Authenticated endpoint protected by Sanctum and throttled. Returns the current order book for a symbol.
-
-- Method: GET
-- Path: /api/orders
-- Query params:
-    - symbol (required): e.g., BTC, ETH (case-insensitive; must be a supported Crypto enum)
-    - limit (optional): number of levels per side; default 100, max 1000
-    - raw (optional): when true returns individual open orders; default false (aggregated by price level)
-
-Responses
-
-Aggregated (default)
-
+Response
+```
 {
-"bids": [
-{ "price": "68000.000000000000000000", "amount": "1.250000000000000000" },
-{ "price": "67950.000000000000000000", "amount": "0.750000000000000000" }
-],
-"asks": [
-{ "price": "68100.000000000000000000", "amount": "0.500000000000000000" }
-]
+  "usdBalance": "10000.00",
+  "assets": [
+    {
+      "symbol": "BTC",
+      "amount": "1.000000000000000000",
+      "locked": "0"
+    }
+  ]
 }
+```
 
-Raw mode (?raw=true)
+### GET /api/orders
+Returns order book for a symbol.
 
+Query: symbol=BTC|ETH, limit (default 100), raw=true|false
+
+Aggregated example
+```
 {
-"bids": [
-{ "id": 123, "price": "68000.000000000000000000", "remaining": "0.500000000000000000", "created_at": "2025-12-12T18:45:31+00:00" }
-],
-"asks": [
-{ "id": 124, "price": "68100.000000000000000000", "remaining": "0.500000000000000000", "created_at": "2025-12-12T18:46:01+00:00" }
-]
+  "bids": [
+    {
+      "price": "68000.000000000000000000",
+      "amount": "1.250000000000000000"
+    }
+  ],
+  "asks": [
+    {
+      "price": "68100.000000000000000000",
+      "amount": "0.500000000000000000"
+    }
+  ]
 }
+```
+
+### POST /api/orders
+Body
+```
+{ "symbol": "BTC", "side": "buy", "price": "68000", "amount": "0.5" }
+```
+Returns created order and any immediate trades. Validates funds/assets and decimal scales.
+
+### POST /api/orders/{id}/cancel
+Cancels an open order and releases locked funds/assets atomically.
+
+Response (200)
+```
+{
+  "order": {
+    "id": 123,
+    "status": 3
+  },
+  "portfolio": {
+    "balance": "…",
+    "asset": {
+      "symbol": "BTC",
+      "amount": "…",
+      "locked_amount": "…"
+    }
+  }
+}
+```
 
 Errors
-
-- 401 Unauthorized: when not authenticated
-- 422 Unprocessable Content: invalid or unsupported symbol
+- 401 Unauthorized, 404 Not Found (ownership), 422 Unprocessable Content (validation)
 
 Notes
+- Prices/amounts are strings; return only status=open in the book; indexes ensure performance
 
-- Only orders with status=open are included.
-- Bids are sorted by price DESC (best first). Asks are sorted by price ASC (best first).
-- Amounts and prices are returned as strings to preserve precision; do not cast to float on the client.
-- Query performance uses composite indexes on (symbol, status) and (symbol, side, price, id).
+## Business rules — Matching engine
+- Priority: price‑time (bids best price highest first; asks lowest first; FIFO within same price)
+- Transaction model: all balance/asset/order changes occur inside a single DB transaction; rows are locked with SELECT … FOR UPDATE
+- Matching loop: fetch opposing orders by price then time; consume amounts until the incoming order is filled or book price is unfavorable
+- Concurrency: one in‑process matcher per symbol (queue partition or mutex); Postgres may use FOR UPDATE SKIP LOCKED for concurrent workers if adopted
+- Precision: all arithmetic uses bcmath/BigDecimal; rounding mode ROUND_DOWN to the symbol’s scale
+- Idempotency: accept Idempotency‑Key on place/cancel; repeated requests within a window return the original result
+- Events: broadcast after commit to avoid phantom updates; payloads include only necessary fields
 
-## API – Cancel Order (POST /api/orders/{id}/cancel)
+## Trading commissions
+- Current behavior: commissions default to 0% (no fees applied).
+- Planned/optional model: maker/taker percentages per symbol applied at settlement time.
+  - Fee calculation example: fee = traded_amount × price × rate; round down to fee scale.
+  - Settlement: deduct fee from proceeds for seller or from base currency for buyer depending on policy; store on trade record.
+- Configuration (suggested): environment variables like FEES_MAKER_BPS/FEES_TAKER_BPS per symbol; enforced in matching job when recording trades.
 
-Authenticated endpoint protected by Sanctum and throttled. Cancels an open order, releases locked funds/assets atomically, and broadcasts portfolio and orderbook updates.
+## Real‑time integration
+This project uses Laravel Broadcasting with Pusher‑compatible websockets and a Vue 3 SPA using Laravel Echo. Private channels are authorized via Sanctum session auth.
 
-- Method: POST
-- Path: /api/orders/{id}/cancel
-- Path params:
-    - id (integer): the order ID to cancel. Must belong to the authenticated user.
+Backend (.env)
+- BROADCAST_DRIVER=pusher | reverb | log | null (BROADCAST_CONNECTION supported as fallback)
+- Pusher keys/host: PUSHER_APP_ID, PUSHER_APP_KEY, PUSHER_APP_SECRET, PUSHER_APP_CLUSTER
+- If self‑hosted: PUSHER_HOST, PUSHER_PORT (e.g., 6001), PUSHER_SCHEME=http|https
+- Reverb (first‑party websockets): REVERB_APP_ID, REVERB_APP_KEY, REVERB_APP_SECRET, REVERB_HOST, REVERB_PORT, REVERB_SCHEME
+- Queues: QUEUE_CONNECTION=redis|database; events use $afterCommit=true and broadcastQueue="broadcasts"
 
-Responses
+Channels (routes/channels.php)
+- private-user.{id}: per‑user trading updates (OrderMatched, OrderCancelled)
+- portfolio.{id}: per‑user portfolio updates
+- orderbook.{symbol}: per‑symbol order book updates
 
-200 OK
+Frontend (Vite/Echo)
+- Shared bootstrap resources/js/echo.ts creates window.Echo from Vite env vars
+- Vite vars: VITE_ECHO_ENABLED, VITE_PUSHER_KEY, VITE_PUSHER_CLUSTER, VITE_PUSHER_HOST, VITE_PUSHER_PORT, VITE_PUSHER_SCHEME, VITE_ECHO_FORCE_TLS
+- Private channel auth via /broadcasting/auth with Sanctum session; axios withCredentials=true
 
-{
-"order": {
-"id": 123,
-"user_id": 1,
-"symbol": "BTC",
-"side": "buy",
-"price": "68000.000000000000000000",
-"amount": "0.500000000000000000",
-"remaining": "0",
-"status": 3,
-"created_at": "2025-12-12T18:45:31+00:00",
-"updated_at": "2025-12-12T19:10:00+00:00"
-},
-"portfolio": {
-"balance": "10000.00",
-"asset": {
-"symbol": "BTC",
-"amount": "1.000000000000000000",
-"locked_amount": "0.000000000000000000"
-}
-}
-}
+Local development
+1) Set .env and Vite env vars as above
+2) Run: php artisan queue:work; php artisan serve; (optional) php artisan websockets:serve; npm run dev
+3) Place matching orders or cancel; observe portfolio/order book updating live without refresh
 
-Errors
-
-- 401 Unauthorized: when not authenticated
-- 404 Not Found: when the order does not exist or does not belong to the user (no existence leak)
-
-Notes
-
-- Idempotent: canceling an already filled or canceled order returns 200 with current state and no side effects.
-- All balance changes are done within a single DB transaction with row-level locks.
-- Amounts and prices are strings to preserve precision; do not cast to float on the client.
+Security & production notes
+- Use TLS (https/wss); match schemes/ports to avoid mixed content
+- All channels are private; apply authorization callbacks and throttle auth route
+- Emit prices/amounts as strings; avoid sensitive payload data

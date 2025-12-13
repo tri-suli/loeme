@@ -19,6 +19,11 @@ class OrderMatched implements ShouldBroadcast
     public bool $afterCommit = true;
 
     /**
+     * Queue name for broadcasting job.
+     */
+    public string $broadcastQueue = 'broadcasts';
+
+    /**
      * @param  array<string, mixed>  $payload
      */
     public function __construct(public array $payload) {}
@@ -34,8 +39,12 @@ class OrderMatched implements ShouldBroadcast
         $sellerId = (int) ($this->payload['seller_id'] ?? 0);
 
         return [
+            // Legacy per-user trading channel (kept for backward compatibility)
             new PrivateChannel('private-user.' . $buyerId),
             new PrivateChannel('private-user.' . $sellerId),
+            // Portfolio-specific channel per user (preferred)
+            new PrivateChannel('portfolio.' . $buyerId),
+            new PrivateChannel('portfolio.' . $sellerId),
         ];
     }
 
