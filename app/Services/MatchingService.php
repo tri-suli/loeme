@@ -148,32 +148,29 @@ class MatchingService
                 // Identify which order is buyer's original order to compute refund if needed
                 if ($side->isBuying()) {
                     // Buyer is the new order. Buyer pays commission (USD) from reserved funds.
-                    $reserved = bcmul((string) $freshNew->price, $amount, 18);
-                    // delta = reserved - (gross + commission)
-                    $delta = bcsub($reserved, bcadd($grossUsd, $commission, 18), 18);
+                    $reservedCost = bcmul((string) $freshNew->price, $amount, 18);
+                    $reservedFee = $this->calcCommission($reservedCost);
+                    $reservedTotal = bcadd($reservedCost, $reservedFee, 18);
+                    // delta = (reserved cost+fee at order) - (executed gross+fee at execution)
+                    $delta = bcsub($reservedTotal, bcadd($grossUsd, $commission, 18), 18);
                     if (bccomp($delta, '0', 18) > 0) {
-                        // Refund the difference
+                        // Refund the difference (e.g., price improvement and/or lower fee at execution)
                         $buyer->balance = $this->formatUsd(bcadd((string) $buyer->balance, $delta, 2));
                         $buyer->save();
-                    } elseif (bccomp($delta, '0', 18) < 0) {
-                        // Need to deduct additional amount (fee excess over reserved)
-                        $extraDebit = bcmul($delta, '-1', 18);
-                        $buyer->balance = $this->formatUsd(bcsub((string) $buyer->balance, $extraDebit, 2));
-                        $buyer->save();
                     }
+                    // If delta <= 0, do nothing; never extra‑debit beyond reservation
                 } else {
-                    // Buyer is the resting order ($counter). Buyer pays commission (USD).
-                    $reserved = bcmul((string) $counter->price, $amount, 18);
-                    $delta = bcsub($reserved, bcadd($grossUsd, $commission, 18), 18);
+                    // Buyer is the resting order ($counter). Buyer pays commission (USD) from its original reservation.
+                    $reservedCost = bcmul((string) $counter->price, $amount, 18);
+                    $reservedFee = $this->calcCommission($reservedCost);
+                    $reservedTotal = bcadd($reservedCost, $reservedFee, 18);
+                    $delta = bcsub($reservedTotal, bcadd($grossUsd, $commission, 18), 18);
                     if (bccomp($delta, '0', 18) > 0) {
-                        // Refund unlikely in this path (execution at resting price), but handle generically
+                        // Refund unlikely here (usually exec at resting price), but handle generically
                         $buyer->balance = $this->formatUsd(bcadd((string) $buyer->balance, $delta, 2));
                         $buyer->save();
-                    } elseif (bccomp($delta, '0', 18) < 0) {
-                        $extraDebit = bcmul($delta, '-1', 18);
-                        $buyer->balance = $this->formatUsd(bcsub((string) $buyer->balance, $extraDebit, 2));
-                        $buyer->save();
                     }
+                    // If delta <= 0, do nothing; never extra‑debit beyond reservation
                 }
 
                 // Credit platform fee wallet (USD) and seller proceeds.

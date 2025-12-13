@@ -21,6 +21,12 @@ use Illuminate\Validation\ValidationException;
 class OrdersController extends Controller
 {
     /**
+     * Commission rate as a decimal string (1.5% = 0.015).
+     * Keep in sync with MatchingService until centralized in config.
+     */
+    private const COMMISSION_RATE = '0.015';
+
+    /**
      * GET /api/orders – Order book endpoint.
      *
      * Query params:
@@ -178,12 +184,16 @@ class OrdersController extends Controller
                 // BUY: Lock user USD balance row and deduct cost
                 $lockedUser = $user->newQuery()->whereKey($user->id)->lockForUpdate()->first();
                 $currentBalance = (string) $lockedUser->balance;
-                if (bccomp($currentBalance, $cost, 18) < 0) {
+                // Reserve fee upfront based on limit price (cost)
+                $feeAtOrder = $this->formatUsd(bcmul($cost, self::COMMISSION_RATE, 18));
+                $required = bcadd($cost, $feeAtOrder, 18);
+                if (bccomp($currentBalance, $required, 18) < 0) {
                     throw ValidationException::withMessages([
                         'amount' => 'Insufficient USD balance to place this buy order.',
                     ]);
                 }
-                $newBalance = bcsub($currentBalance, $cost, 18);
+                // Deduct cost + fee reservation
+                $newBalance = bcsub($currentBalance, $required, 18);
                 $lockedUser->balance = $this->formatUsd($newBalance);
                 $lockedUser->save();
 
@@ -286,10 +296,12 @@ class OrdersController extends Controller
             ];
 
             if ($side->isBuying()) {
-                // Refund reserved USD = price * remaining
+                // Refund reserved USD = price * remaining + reserved fee on remaining
                 $lockedUser = $user->newQuery()->whereKey($user->id)->lockForUpdate()->firstOrFail();
                 $releaseUsd = bcmul((string) $order->price, $remaining, 18);
-                $lockedUser->balance = $this->formatUsd(bcadd((string) $lockedUser->balance, $releaseUsd, 2));
+                $releaseFee = $this->formatUsd(bcmul($releaseUsd, self::COMMISSION_RATE, 18));
+                $refundTotal = bcadd($releaseUsd, $releaseFee, 18);
+                $lockedUser->balance = $this->formatUsd(bcadd((string) $lockedUser->balance, $refundTotal, 2));
                 $lockedUser->save();
 
                 $portfolio['balance'] = (string) $lockedUser->balance;
