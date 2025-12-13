@@ -12,6 +12,7 @@
     "test": "vitest --run"
   },
   "devDependencies": {
+    "@laravel/echo-vue": "^2.2.6",
     "@tailwindcss/vite": "^4.0.0",
     "@typescript-eslint/parser": "^8.49.0",
     "@vitejs/plugin-vue": "^6.0.2",
@@ -20,8 +21,10 @@
     "eslint": "^9.39.1",
     "eslint-plugin-vue": "^10.6.2",
     "husky": "^9.1.7",
+    "laravel-echo": "^2.2.6",
     "laravel-vite-plugin": "^2.0.0",
     "prettier": "^3.7.4",
+    "pusher-js": "^8.4.0",
     "tailwindcss": "^4.1.17",
     "typescript": "^5.9.3",
     "vite": "^7.0.7",

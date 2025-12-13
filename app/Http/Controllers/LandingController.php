@@ -1,0 +1,18 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use Inertia\Inertia;
+
+class LandingController extends Controller
+{
+    /**
+     * Handle the incoming request.
+     */
+    public function __invoke()
+    {
+        return Inertia::render('Welcome', [
+            'appName' => config('app.name', 'Laravel'),
+        ]);
+    }
+}
