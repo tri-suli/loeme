@@ -20,6 +20,11 @@ class MatchingService
     private const COMMISSION_RATE = '0.015';
 
     /**
+     * Platform account identifier. Fees are credited to this user (USD balance).
+     */
+    private const PLATFORM_EMAIL = 'platform@loeme.local';
+
+    /**
      * Try to match the provided newly-created open order with the first eligible opposite order.
      * Full match only; no partial fills.
      *
@@ -84,7 +89,6 @@ class MatchingService
                 $executionPrice = (string) $counter->price;
                 $grossUsd = bcmul($executionPrice, $amount, 18);
                 $commission = $this->calcCommission($grossUsd);
-                $sellerProceeds = bcsub($grossUsd, $commission, 18);
 
                 // Ensure the seller has the asset locked; lock asset rows
                 $sellerAsset = Asset::query()
@@ -143,19 +147,60 @@ class MatchingService
                 // USD: Buyer already had funds deducted when placing BUY order
                 // Identify which order is buyer's original order to compute refund if needed
                 if ($side->isBuying()) {
-                    // New order is BUY: refund any over-reserved USD (limit - execution)
-                    $reserved = bcmul((string) $freshNew->price, $amount, 18);
-                    $refund = bcsub($reserved, $grossUsd, 18);
-                    if (bccomp($refund, '0', 18) > 0) {
-                        $buyer->balance = $this->formatUsd(bcadd((string) $buyer->balance, $refund, 2));
+                    // Buyer is the new order. Buyer pays commission (USD) from reserved funds.
+                    $reservedCost = bcmul((string) $freshNew->price, $amount, 18);
+                    $reservedFee = $this->calcCommission($reservedCost);
+                    $reservedTotal = bcadd($reservedCost, $reservedFee, 18);
+                    // delta = (reserved cost+fee at order) - (executed gross+fee at execution)
+                    $delta = bcsub($reservedTotal, bcadd($grossUsd, $commission, 18), 18);
+                    if (bccomp($delta, '0', 18) > 0) {
+                        // Refund the difference (e.g., price improvement and/or lower fee at execution)
+                        $buyer->balance = $this->formatUsd(bcadd((string) $buyer->balance, $delta, 2));
                         $buyer->save();
                     }
+                    // If delta <= 0, do nothing; never extra‑debit beyond reservation
                 } else {
-                    // New order is SELL: execution at resting BUY price => no refund needed for buyer
+                    // Buyer is the resting order ($counter). Buyer pays commission (USD) from its original reservation.
+                    $reservedCost = bcmul((string) $counter->price, $amount, 18);
+                    $reservedFee = $this->calcCommission($reservedCost);
+                    $reservedTotal = bcadd($reservedCost, $reservedFee, 18);
+                    $delta = bcsub($reservedTotal, bcadd($grossUsd, $commission, 18), 18);
+                    if (bccomp($delta, '0', 18) > 0) {
+                        // Refund unlikely here (usually exec at resting price), but handle generically
+                        $buyer->balance = $this->formatUsd(bcadd((string) $buyer->balance, $delta, 2));
+                        $buyer->save();
+                    }
+                    // If delta <= 0, do nothing; never extra‑debit beyond reservation
                 }
 
-                // Credit seller proceeds (gross minus commission)
-                $seller->balance = $this->formatUsd(bcadd((string) $seller->balance, $sellerProceeds, 2));
+                // Credit platform fee wallet (USD) and seller proceeds.
+                // Lock or create the platform account inside the same transaction for conservation.
+                $platform = User::query()
+                    ->where('email', self::PLATFORM_EMAIL)
+                    ->lockForUpdate()
+                    ->first();
+
+                if (! $platform) {
+                    $platform = new User([
+                        'name'     => 'Platform',
+                        'email'    => self::PLATFORM_EMAIL,
+                        'password' => '',
+                        'balance'  => '0.00',
+                    ]);
+                    $platform->save();
+                    // Re-lock the freshly created row
+                    $platform = User::query()
+                        ->where('email', self::PLATFORM_EMAIL)
+                        ->lockForUpdate()
+                        ->firstOrFail();
+                }
+
+                // Credit platform with the commission in USD (quote currency)
+                $platform->balance = $this->formatUsd(bcadd((string) $platform->balance, $commission, 2));
+                $platform->save();
+
+                // Buyer pays fee: seller receives full gross amount in USD
+                $seller->balance = $this->formatUsd(bcadd((string) $seller->balance, $grossUsd, 2));
                 $seller->save();
 
                 // Persist trade (idempotent) and prepare broadcast payload
@@ -180,8 +225,24 @@ class MatchingService
                         'price'         => $executionPrice,
                         'amount'        => $amount,
                         'executed_at'   => now(),
+                        // Fee fields persisted for accounting and reconciliation
+                        'fee_amount'   => $commission,
+                        'fee_currency' => 'USD',
+                        'fee_payer'    => 'buyer',
                     ]
                 );
+
+                // In the unlikely case the trade existed (idempotency), ensure fee fields are populated
+                if (
+                    ($trade->fee_amount ?? null) !== $commission ||
+                    ($trade->fee_currency ?? null) !== 'USD' ||
+                    ($trade->fee_payer ?? null) !== 'buyer'
+                ) {
+                    $trade->fee_amount = $commission;
+                    $trade->fee_currency = 'USD';
+                    $trade->fee_payer = 'buyer';
+                    $trade->save();
+                }
 
                 $payload = [
                     'trade_id'      => $trade->trade_uid,
